@@ -167,8 +167,13 @@ func resourceEventGridSystemTopicRead(d *pluginsdk.ResourceData, meta interface{
 
 		if props := model.Properties; props != nil {
 			d.Set("metric_arm_resource_id", props.MetricResourceId)
-			d.Set("source_arm_resource_id", props.Source)
 			d.Set("topic_type", props.TopicType)
+
+			sourceId := props.Source
+			if sourceResourceId := pluginsdk.PopulatedResourceIDFromString(pointer.From(props.Source), true); sourceResourceId != nil {
+				sourceId = pointer.To(sourceResourceId.ID())
+			}
+			d.Set("source_arm_resource_id", sourceId)
 		}
 
 		flattenedIdentity, err := identity.FlattenSystemAndUserAssignedMap(model.Identity)
