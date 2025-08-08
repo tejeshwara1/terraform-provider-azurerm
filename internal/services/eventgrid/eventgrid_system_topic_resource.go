@@ -169,6 +169,8 @@ func resourceEventGridSystemTopicRead(d *pluginsdk.ResourceData, meta interface{
 			d.Set("metric_arm_resource_id", props.MetricResourceId)
 			d.Set("topic_type", props.TopicType)
 
+			// This has the potential to ForceNew if users have input a string with incorrect casing (likely...)
+			// diff suppress func + this or just diff suppress func?
 			sourceId := props.Source
 			if sourceResourceId := pluginsdk.PopulatedResourceIDFromString(pointer.From(props.Source), true); sourceResourceId != nil {
 				sourceId = pointer.To(sourceResourceId.ID())
