@@ -10,12 +10,11 @@ import (
 
 	"github.com/hashicorp/go-azure-helpers/lang/pointer"
 	"github.com/hashicorp/go-azure-helpers/lang/response"
+	"github.com/hashicorp/go-azure-helpers/resourcemanager/keyvault"
 	"github.com/hashicorp/go-azure-sdk/resource-manager/operationalinsights/2022-10-01/clusters"
 	"github.com/hashicorp/terraform-provider-azurerm/helpers/tf"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/clients"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/locks"
-	keyVaultParse "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/parse"
-	keyVaultValidate "github.com/hashicorp/terraform-provider-azurerm/internal/services/keyvault/validate"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/services/loganalytics/migration"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/tf/pluginsdk"
 	"github.com/hashicorp/terraform-provider-azurerm/internal/timeouts"
@@ -54,9 +53,19 @@ func resourceLogAnalyticsClusterCustomerManagedKey() *pluginsdk.Resource {
 			},
 
 			"key_vault_key_id": {
-				Type:         pluginsdk.TypeString,
-				Required:     true,
-				ValidateFunc: keyVaultValidate.NestedItemIdWithOptionalVersion,
+				Type:     pluginsdk.TypeString,
+				Required: true,
+				// TODO: remove comment once ready to PR this change
+				// changing this to validate specifically for a key is technically breaking
+				// however Azure only works when provided with a key, so should be ok
+				/*
+					│ Error: creating Customer Managed Key for Cluster (Subscription: ""
+					│ Resource Group Name: "acctestRGmp4"
+					│ Cluster Name: "acctest-LA-1021"): performing CreateOrUpdate: unexpected status 400 (400 Bad Request) with error: KeyVaultKeyNotFound: Failed to fetch encryption key 'https://acctest1021.vault.azure.net//keys/secret-1021/5c0a3fc3f13d44f08f26a7b052e174de' due to error - A key with (name/id) secret-1021/5c0a3fc3f13d44f08f26a7b052e174de was not found in this key vault. If you recently deleted this key you may be able to recover it using the correct recovery command. For help resolving this issue, please see https://go.microsoft.com/fwlink/?linkid=2125182
+					│ Status: 404 (Not Found)
+					│ ErrorCode: KeyNotFound
+				*/
+				ValidateFunc: keyvault.ValidateNestedItemID(keyvault.VersionTypeAny, keyvault.NestedItemTypeKey),
 			},
 		},
 	}
@@ -107,15 +116,15 @@ func resourceLogAnalyticsClusterCustomerManagedKeyCreate(d *pluginsdk.ResourceDa
 	//		Please refer to https://docs.microsoft.com/en-us/azure/azure-monitor/log-query/logs-dedicated-clusters#link-a-workspace-to-the-cluster for more information on how to associate a workspace to the cluster.
 	props.AssociatedWorkspaces = nil
 
-	keyId, err := keyVaultParse.ParseOptionallyVersionedNestedItemID(d.Get("key_vault_key_id").(string))
+	keyId, err := keyvault.ParseNestedItemID(d.Get("key_vault_key_id").(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
 	if err != nil {
-		return fmt.Errorf("parsing Key Vault Key ID: %+v", err)
+		return err
 	}
 
 	model.Properties.KeyVaultProperties = &clusters.KeyVaultProperties{
-		KeyVaultUri: pointer.To(keyId.KeyVaultBaseUrl),
+		KeyVaultUri: pointer.To(keyId.KeyVaultBaseURL),
 		KeyName:     pointer.To(keyId.Name),
-		KeyVersion:  pointer.To(keyId.Version),
+		KeyVersion:  keyId.Version,
 	}
 
 	if err := client.CreateOrUpdateThenPoll(ctx, *id, *model); err != nil {
@@ -147,9 +156,9 @@ func resourceLogAnalyticsClusterCustomerManagedKeyUpdate(d *pluginsdk.ResourceDa
 	locks.ByID(id.ID())
 	defer locks.UnlockByID(id.ID())
 
-	keyId, err := keyVaultParse.ParseOptionallyVersionedNestedItemID(d.Get("key_vault_key_id").(string))
+	keyId, err := keyvault.ParseNestedItemID(d.Get("key_vault_key_id").(string), keyvault.VersionTypeAny, keyvault.NestedItemTypeKey)
 	if err != nil {
-		return fmt.Errorf("parsing Key Vault Key ID: %+v", err)
+		return err
 	}
 
 	resp, err := client.Get(ctx, *id)
@@ -174,9 +183,9 @@ func resourceLogAnalyticsClusterCustomerManagedKeyUpdate(d *pluginsdk.ResourceDa
 	model.Properties.AssociatedWorkspaces = nil
 
 	model.Properties.KeyVaultProperties = &clusters.KeyVaultProperties{
-		KeyVaultUri: pointer.To(keyId.KeyVaultBaseUrl),
+		KeyVaultUri: pointer.To(keyId.KeyVaultBaseURL),
 		KeyName:     pointer.To(keyId.Name),
-		KeyVersion:  pointer.To(keyId.Version),
+		KeyVersion:  keyId.Version,
 	}
 
 	if err := client.CreateOrUpdateThenPoll(ctx, *id, *model); err != nil {
@@ -212,10 +221,9 @@ func resourceLogAnalyticsClusterCustomerManagedKeyRead(d *pluginsdk.ResourceData
 			if kvProps := props.KeyVaultProperties; kvProps != nil {
 				keyVaultUri := pointer.From(kvProps.KeyVaultUri)
 				keyName := pointer.From(kvProps.KeyName)
-				keyVersion := pointer.From(kvProps.KeyVersion)
 
 				if keyVaultUri != "" && keyName != "" {
-					keyId, err := keyVaultParse.NewNestedItemID(keyVaultUri, keyVaultParse.NestedItemTypeKey, keyName, keyVersion)
+					keyId, err := keyvault.NewNestedItemID(keyVaultUri, keyvault.NestedItemTypeKey, keyName, kvProps.KeyVersion)
 					if err != nil {
 						return err
 					}
